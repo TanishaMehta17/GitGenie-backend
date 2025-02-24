@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import { PrismaClient, User } from "@prisma/client";  // Adjust based on the Prisma Client setup
 const prisma = new PrismaClient();
 const JWT_SECRET = process.env.JWT_SECRET as string;
+import { Request, Response } from "express";
 
 interface SignupRequest {
   name: string;
@@ -18,6 +19,9 @@ interface LoginRequest {
 
 interface ProfileRequest {
   userId: string;
+}
+interface AuthRequest extends Request {
+  userId?: string;
 }
 
 interface TokenRequest {
@@ -128,22 +132,30 @@ const TokenisValid = async (req: TokenRequest, res: any): Promise<void> => {
 };
 
 
-const getdata = async (req: { userId: string; header: (name: string) => string | undefined }, res: any): Promise<void> => {
+
+
+const getdata = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    if (!req.userId) {
+      res.status(400).json({ message: "User ID not found in request" });
+      return;
+    }
+
     const user = await prisma.user.findUnique({
       where: { id: req.userId },
     });
 
     if (!user) {
-      return res.status(404).json({ message: "User not found" });
+      res.status(404).json({ message: "User not found" });
+      return;
     }
+
     const token = req.header("token");
 
     res.json({
       email: user.email,
       username: user.name,
       id: req.userId,
-      password: user.password,
       token,
     });
   } catch (error) {
