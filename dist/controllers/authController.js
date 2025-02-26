@@ -115,18 +115,22 @@ const TokenisValid = (req, res) => __awaiter(void 0, void 0, void 0, function* (
 exports.TokenisValid = TokenisValid;
 const getdata = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     try {
+        if (!req.userId) {
+            res.status(400).json({ message: "User ID not found in request" });
+            return;
+        }
         const user = yield prisma.user.findUnique({
             where: { id: req.userId },
         });
         if (!user) {
-            return res.status(404).json({ message: "User not found" });
+            res.status(404).json({ message: "User not found" });
+            return;
         }
         const token = req.header("token");
         res.json({
             email: user.email,
             username: user.name,
             id: req.userId,
-            password: user.password,
             token,
         });
     }
