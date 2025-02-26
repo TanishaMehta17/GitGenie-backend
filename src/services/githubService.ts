@@ -134,20 +134,30 @@ export const assignReviewer = async (owner: string, repo: string, prNumber: numb
  */
 export const addLabelToPR = async (owner: string, repo: string, prNumber: number, label: string) => {
     try {
-        await axios.post(
-            `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/labels`,
+        const githubToken = process.env.GITHUB_ACCESS_TOKEN;
+        if (!githubToken) {
+            throw new Error("GitHub token is missing");
+        }
+
+        const url = `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/labels`;
+        console.log("Adding label to PR:", url);
+
+        const response = await axios.post(
+            url,
             { labels: [label] },
             {
                 headers: {
-                    Authorization: `Bearer ${GITHUB_TOKEN}`,
+                    Authorization: `Bearer ${githubToken}`,
                     Accept: "application/vnd.github.v3+json"
                 }
             }
         );
 
+        console.log("Label added successfully:", response.data);
         return { success: true, label };
     } catch (error: any) {
         console.error("Error in addLabelToPR:", error?.response?.data || error.message);
         return { success: false, message: "Failed to add label", error: error?.response?.data };
     }
 };
+
