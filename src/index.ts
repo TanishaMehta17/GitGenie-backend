@@ -3,7 +3,6 @@ import cors from "cors";
 import dotenv from "dotenv";
 dotenv.config();
 
-import { graphqlHTTP } from "express-graphql";
 import authRoutes from './routes/authRoutes'; // Import the authRoutes
 import reviewRouter from "./routes/reviewRoutes";
 

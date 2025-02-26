@@ -1,4 +1,4 @@
-import axios from "axios";
+
 import dotenv from "dotenv";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
@@ -6,8 +6,6 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 dotenv.config();
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_API_URL = process.env.GEMINI_API_URL;
 
 /**
  * Calls Gemini AI with RAG to generate code fixes based on PR diff.

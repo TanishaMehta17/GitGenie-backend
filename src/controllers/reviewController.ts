@@ -172,25 +172,27 @@ const fetchPRDetails = async (repoOwner: string, repoName: string, prNumber: num
   }
 };
 
-// Retrieve RAG Context (Embedding)
+
 const retrieveRAGContext = async (code: string): Promise<string[]> => {
   const embeddingModel = genAI.getGenerativeModel({ model: "embedding-001" });
 
+  // ✅ Ensure input does not exceed 10,000 bytes
+  if (code.length > 10000) {
+    console.warn("Trimming input to meet API size limits.");
+    code = code.substring(0, 10000);
+  }
+
   const embeddingResponse = await embeddingModel.embedContent({
-    content: {
-      role: "user",
-      parts: [{ text: code }],  // ✅ Correct structure
-    },
+    content: { role: "user", parts: [{ text: code }] },
   });
 
-  const queryVector = embeddingResponse.embedding;
-  if (!queryVector || !queryVector.values) {
+  if (!embeddingResponse.embedding || !embeddingResponse.embedding.values) {
     throw new Error("Failed to generate embeddings.");
   }
 
-  // Query the Pinecone vector index
+  const queryVector = embeddingResponse.embedding.values;
   const queryResponse = await index.query({
-    vector: queryVector.values,
+    vector: queryVector,
     topK: 3,
     includeMetadata: true,
   });
@@ -230,7 +232,8 @@ const analyzeCodeWithAI = async (code: string, context: string[]) => {
   }
   `;
 
-  const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+  const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
+
   const response = await model.generateContent(prompt);
   let analysis = await response.response.text();
 
@@ -250,31 +253,6 @@ const analyzeCodeWithAI = async (code: string, context: string[]) => {
   }
 };
 
-
-//PR Analysis
-// const analyzePR = async (req: Request, res: Response, next: NextFunction) => {
-//   try {
-//     const { repoOwner, repoName, prNumber } = req.body;
-//     console.log(`Analyzing PR: ${repoOwner}/${repoName} #${prNumber}`);
-
-//     const prDetails = await fetchPRDetails(repoOwner, repoName, prNumber);
-//     const prDiff = await fetchPRDiff(repoOwner, repoName, prNumber);
-    
-//     const ragContext = await retrieveRAGContext(prDiff);
-//     const aiAnalysis = await analyzeCodeWithAI(prDiff, ragContext);
-
-//     res.json({
-//       success: true,
-//       prTitle: prDetails.title,
-//       author: prDetails.user.login,
-//       changes: prDiff,
-//       analysis: aiAnalysis,
-//     });
-//   } catch (error) {
-//     console.error("PR analysis failed:", error);
-//     res.status(500).json({ error: "PR analysis failed" });
-//   }
-// };
 const analyzePR = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { repoOwner, repoName, prNumber } = req.body;
