@@ -13,6 +13,9 @@ RUN npm install
 # 5. Copy the entire application
 COPY . .
 
+# 5.5 Copy .env file (important for environment variables)
+COPY .env .env
+
 # 6. Install Prisma CLI globally
 RUN npm install -g prisma
 

@@ -119,8 +119,8 @@
 //   }
 // };
 
-// export { analyzePR };
-import axios from "axios";
+
+ import axios from "axios";
 import dotenv from "dotenv";
 import { Request, Response, NextFunction } from "express";
 import { GoogleGenerativeAI } from "@google/generative-ai";
@@ -140,14 +140,27 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const pinecone = new Pinecone({ apiKey: PINECONE_API_KEY });
 const index = pinecone.index(PINECONE_INDEX_NAME);
 
+let pineconeDimension = 768; // Default to 768
+
+// Fetch Pinecone index metadata to check the expected dimension
+const fetchPineconeMetadata = async () => {
+  try {
+    const details = await index.describeIndexStats();
+    pineconeDimension = details.dimension || 768; // Default if not available
+    console.log(`✅ Pinecone index dimension: ${pineconeDimension}`);
+  } catch (error) {
+    console.error("⚠️ Failed to fetch Pinecone index metadata. Using default 768.");
+  }
+};
+
+// Run once at startup
+fetchPineconeMetadata();
+
 // Fetch PR Diff
 const fetchPRDiff = async (repoOwner: string, repoName: string, prNumber: number): Promise<string> => {
   try {
     const response = await axios.get(`https://api.github.com/repos/${repoOwner}/${repoName}/pulls/${prNumber}.diff`, {
-      headers: {
-        Authorization: `Bearer ${GITHUB_ACCESS_TOKEN}`,
-        Accept: "application/vnd.github.v3.diff",
-      },
+      headers: { Authorization: `Bearer ${GITHUB_ACCESS_TOKEN}`, Accept: "application/vnd.github.v3.diff" },
     });
     return response.data;
   } catch (error) {
@@ -160,10 +173,7 @@ const fetchPRDiff = async (repoOwner: string, repoName: string, prNumber: number
 const fetchPRDetails = async (repoOwner: string, repoName: string, prNumber: number): Promise<any> => {
   try {
     const response = await axios.get(`https://api.github.com/repos/${repoOwner}/${repoName}/pulls/${prNumber}`, {
-      headers: {
-        Authorization: `Bearer ${GITHUB_ACCESS_TOKEN}`,
-        Accept: "application/vnd.github.v3+json",
-      },
+      headers: { Authorization: `Bearer ${GITHUB_ACCESS_TOKEN}`, Accept: "application/vnd.github.v3+json" },
     });
     return response.data;
   } catch (error) {
@@ -172,11 +182,9 @@ const fetchPRDetails = async (repoOwner: string, repoName: string, prNumber: num
   }
 };
 
-
-const retrieveRAGContext = async (code: string): Promise<string[]> => {
+const storeInPinecone = async (code: string) => {
   const embeddingModel = genAI.getGenerativeModel({ model: "embedding-001" });
 
-  // ✅ Ensure input does not exceed 10,000 bytes
   if (code.length > 10000) {
     console.warn("Trimming input to meet API size limits.");
     code = code.substring(0, 10000);
@@ -190,19 +198,59 @@ const retrieveRAGContext = async (code: string): Promise<string[]> => {
     throw new Error("Failed to generate embeddings.");
   }
 
-  const queryVector = embeddingResponse.embedding.values;
-  const queryResponse = await index.query({
-    vector: queryVector,
-    topK: 3,
-    includeMetadata: true,
-  });
+  let vector = embeddingResponse.embedding.values;
 
-  return queryResponse.matches
-    .map((match) => match.metadata?.content as string | undefined)
-    .filter((content) => content !== undefined) as string[];
+  // Fix dimension mismatch: Trim or pad the vector
+  if (vector.length !== pineconeDimension) {
+    console.warn(`Vector dimension mismatch: ${vector.length} vs ${pineconeDimension}`);
+
+    if (vector.length > pineconeDimension) {
+      vector = vector.slice(0, pineconeDimension);
+    } else {
+      while (vector.length < pineconeDimension) {
+        vector.push(0); // Padding with zeros
+      }
+    }
+  }
+
+  await index.upsert([
+    { id: `pr-${Date.now()}`, values: vector, metadata: { content: code } },
+  ]);
 };
 
+const retrieveRAGContext = async (code: string): Promise<string[]> => {
+  const embeddingModel = genAI.getGenerativeModel({ model: "embedding-001" });
 
+  if (code.length > 10000) {
+    console.warn("Trimming input to meet API size limits.");
+    code = code.substring(0, 10000);
+  }
+
+  const embeddingResponse = await embeddingModel.embedContent({
+    content: { role: "user", parts: [{ text: code }] },
+  });
+
+  if (!embeddingResponse.embedding || !embeddingResponse.embedding.values) {
+    throw new Error("Failed to generate embeddings.");
+  }
+
+  let queryVector = embeddingResponse.embedding.values;
+
+  // Fix dimension mismatch
+  if (queryVector.length !== pineconeDimension) {
+    if (queryVector.length > pineconeDimension) {
+      queryVector = queryVector.slice(0, pineconeDimension);
+    } else {
+      while (queryVector.length < pineconeDimension) {
+        queryVector.push(0);
+      }
+    }
+  }
+
+  const queryResponse = await index.query({ vector: queryVector, topK: 3, includeMetadata: true });
+
+  return queryResponse.matches.map((match) => match.metadata?.content as string).filter(Boolean);
+};
 
 const analyzeCodeWithAI = async (code: string, context: string[]) => {
   const prompt = `Analyze the following **GitHub Pull Request (PR) changes** and provide a structured code review. Your review must cover:
@@ -260,32 +308,17 @@ const analyzePR = async (req: Request, res: Response, next: NextFunction) => {
 
     const prDetails = await fetchPRDetails(repoOwner, repoName, prNumber);
     const prDiff = await fetchPRDiff(repoOwner, repoName, prNumber);
-    
+
+    await storeInPinecone(prDiff);
     const ragContext = await retrieveRAGContext(prDiff);
-console.log("🔍 RAG Search Query:", prDiff);
-console.log("📂 RAG Context Retrieved:", ragContext);
 
-    const aiAnalysis = await analyzeCodeWithAI(prDiff, ragContext); // ✅ Now ensures a proper response
+    const aiAnalysis = await analyzeCodeWithAI(prDiff, ragContext);
 
-    const diffSummary = prDiff.length > 500 ? prDiff.substring(0, 500) + "..." : prDiff;
-
-    res.json({
-      success: true,
-      prTitle: prDetails.title,
-      author: prDetails.user.login,
-      changedFiles: prDetails.changed_files,
-      additions: prDetails.additions,
-      deletions: prDetails.deletions,
-      totalChanges: prDetails.additions + prDetails.deletions,
-      diffSummary,
-      analysis: aiAnalysis, // ✅ Now always contains proper data
-    });
+    res.json({ success: true, prTitle: prDetails.title, analysis: aiAnalysis });
   } catch (error) {
     console.error("PR analysis failed:", error);
     res.status(500).json({ error: "PR analysis failed", details: error });
   }
 };
-
-
 
 export { analyzePR };
